@@ -17,6 +17,10 @@ const CheckIcon = () => (
   <svg className="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
 );
 
+const SettingsIcon = () => (
+  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+);
+
 const App: React.FC = () => {
   // --- State ---
   const [step, setStep] = useState<number>(1);
@@ -26,7 +30,11 @@ const App: React.FC = () => {
   const [isRefining, setIsRefining] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [showSavedMenu, setShowSavedMenu] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [savedCourses, setSavedCourses] = useState<SavedCourse[]>([]);
+  
+  // Settings State
+  const [apiKey, setApiKey] = useState<string>(localStorage.getItem('MY_TTT_API_KEY') || '');
 
   // Data
   const [basics, setBasics] = useState<CourseBasics>({
@@ -95,6 +103,18 @@ const App: React.FC = () => {
     reader.readAsText(file);
   };
 
+  // --- Settings Handlers ---
+  const saveApiKey = () => {
+    if (apiKey.trim()) {
+      localStorage.setItem('MY_TTT_API_KEY', apiKey.trim());
+      alert("Settings Saved! The app will now use your custom Gemini API key.");
+    } else {
+      localStorage.removeItem('MY_TTT_API_KEY');
+      alert("Custom API Key cleared. Reverting to system default.");
+    }
+    setShowSettings(false);
+  };
+
   // --- Navigation & Flow ---
 
   const advanceStep = (nextStep: number) => {
@@ -114,7 +134,12 @@ const App: React.FC = () => {
       const res = await generateOutcomes(basics);
       setOutcomes(res);
       advanceStep(2);
-    } catch (err) { setError("Failed to generate outcomes"); setOutcomes([{id:'1', text:''}]); advanceStep(2); }
+    } catch (err: any) { 
+      setError(err.message || "Failed to generate outcomes"); 
+      alert(err.message || "Error generating content. Check your API Key in Settings.");
+      setOutcomes([{id:'1', text:''}]); 
+      advanceStep(2); 
+    }
     finally { setStatus(GenerationStatus.IDLE); }
   };
 
@@ -126,7 +151,10 @@ const App: React.FC = () => {
       const res = await generateCourseStructure(basics, outcomes);
       setStructure(res);
       advanceStep(3);
-    } catch (err) { setError("Failed to outline structure"); }
+    } catch (err: any) { 
+      setError(err.message || "Failed to outline structure"); 
+      alert("Error: " + err.message);
+    }
     finally { setStatus(GenerationStatus.IDLE); }
   };
 
@@ -154,10 +182,7 @@ const App: React.FC = () => {
 
   // Step 3 -> 4
   const prepareIceBreakers = async () => {
-    // Check if structure changed significantly? 
-    // Simply proceed. If they modified Step 3, they will land in Step 4.
     advanceStep(4);
-    // Generate options for Day 1 immediately if not present
     if (!iceBreakerOptions[0]) {
       loadIceBreakerOptions(1, 0);
     }
@@ -180,13 +205,15 @@ const App: React.FC = () => {
 
   // Step 4 -> 5
   const generateFinal = async () => {
-    // Approval Gate: If coursePlan exists, we are overwriting it.
     setError(null); setStatus(GenerationStatus.GENERATING_PLAN); setLoadingMsg("Developing detailed content...");
     try {
       const finalSchedule = await generateFinalPlanContent(basics, outcomes, structure, (msg) => setLoadingMsg(msg));
       setCoursePlan({ basics, outcomes, schedule: finalSchedule });
       advanceStep(5);
-    } catch (e) { setError("Failed to generate final content"); }
+    } catch (e: any) { 
+      setError(e.message || "Failed to generate final content"); 
+      alert("Error: " + e.message);
+    }
     finally { setStatus(GenerationStatus.IDLE); }
   };
 
@@ -196,7 +223,10 @@ const App: React.FC = () => {
     try {
       const res = await refineContent(currentText, context);
       callback(res);
-    } catch (err) { console.error(err); }
+    } catch (err: any) { 
+      console.error(err);
+      alert("Refine Error: " + err.message);
+    }
     finally { setIsRefining(false); }
   };
 
@@ -211,9 +241,12 @@ const App: React.FC = () => {
             <span className="text-2xl font-bold">MY-TTT</span>
             <span className="text-sm bg-orange-700 px-2 py-1 rounded hidden sm:inline">Course Builder</span>
           </div>
-          <div className="flex items-center space-x-3 text-sm">
+          <div className="flex items-center space-x-2 text-sm">
              <button onClick={() => { loadSavedList(); setShowSavedMenu(!showSavedMenu); }} className="hover:bg-orange-700 px-3 py-1 rounded">
                Saved Courses
+             </button>
+             <button onClick={() => setShowSettings(true)} className="hover:bg-orange-700 p-2 rounded transition-colors" title="Settings">
+               <SettingsIcon />
              </button>
              {step === 5 && (
                <>
@@ -247,6 +280,36 @@ const App: React.FC = () => {
           </div>
         )}
       </nav>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 animate-fade-in">
+            <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+              <SettingsIcon /> System Settings
+            </h2>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Gemini API Key</label>
+                <input 
+                  type="password" 
+                  value={apiKey} 
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Paste your key here..."
+                  className="w-full border rounded-lg p-2 bg-gray-50 focus:ring-2 focus:ring-orange-500 outline-none"
+                />
+                <p className="text-xs text-gray-500 mt-2 italic">
+                  Key is saved locally in your browser and used only for requests. If left empty, the app uses system defaults.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2 pt-4">
+                <button onClick={() => setShowSettings(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+                <button onClick={saveApiKey} className="px-4 py-2 bg-orange-600 text-white rounded-lg font-bold hover:bg-orange-700 shadow-md">Save Changes</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="flex-grow p-4 md:p-8 max-w-7xl mx-auto w-full">

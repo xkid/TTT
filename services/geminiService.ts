@@ -1,15 +1,30 @@
 
-import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { CourseBasics, LearningOutcome, DayPlan, ModuleContent, IceBreaker } from "../types";
 
+/**
+ * Gets the API key from localStorage or falls back to the environment variable.
+ */
+const getApiKey = () => {
+  const userKey = localStorage.getItem('MY_TTT_API_KEY');
+  return userKey || process.env.API_KEY;
+};
+
 const getClient = () => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key not found");
+  const apiKey = getApiKey();
+  
+  if (!apiKey) {
+    throw new Error("Gemini API Key not found. Please set it in Settings.");
+  }
+  
   return new GoogleGenAI({ apiKey });
 };
 
 // --- Step 2: Outcomes ---
 
+/**
+ * Generates suggested learning outcomes based on course basics.
+ */
 export const generateOutcomes = async (basics: CourseBasics): Promise<LearningOutcome[]> => {
   const ai = getClient();
   const prompt = `
@@ -48,6 +63,9 @@ export const generateOutcomes = async (basics: CourseBasics): Promise<LearningOu
 
 // --- Step 3: Structure (Titles) ---
 
+/**
+ * Generates the basic structure (module titles) of the course.
+ */
 export const generateCourseStructure = async (basics: CourseBasics, outcomes: LearningOutcome[]): Promise<DayPlan[]> => {
   const ai = getClient();
   const outcomesText = outcomes.map((o, i) => `${i + 1}. ${o.text}`).join('\n');
@@ -75,8 +93,7 @@ export const generateCourseStructure = async (basics: CourseBasics, outcomes: Le
     Return JSON array of DayPlan. Use placeholders for non-title fields.
   `;
 
-  // Simplified schema for structure
-  const structureSchema: Schema = {
+  const structureSchema = {
     type: Type.ARRAY,
     items: {
       type: Type.OBJECT,
@@ -110,7 +127,6 @@ export const generateCourseStructure = async (basics: CourseBasics, outcomes: Le
 
   const rawDays = JSON.parse(response.text || "[]");
   
-  // Hydrate with empty fields for strict typing
   return rawDays.map((d: any, dIdx: number) => ({
     dayNumber: d.dayNumber,
     iceBreaker: { title: "", description: "", duration: "" },
@@ -130,6 +146,9 @@ export const generateCourseStructure = async (basics: CourseBasics, outcomes: Le
 
 // --- Step 4: Ice Breaker Options ---
 
+/**
+ * Generates options for ice breakers for a specific day.
+ */
 export const generateIceBreakerOptions = async (dayNum: number): Promise<IceBreaker[]> => {
   const ai = getClient();
   const prompt = `
@@ -165,7 +184,7 @@ export const generateIceBreakerOptions = async (dayNum: number): Promise<IceBrea
 
 // --- Step 5: Content Generation (Module by Module) ---
 
-const moduleSchema: Schema = {
+const moduleSchema = {
   type: Type.OBJECT,
   properties: {
     title: { type: Type.STRING },
@@ -178,6 +197,9 @@ const moduleSchema: Schema = {
   required: ["title", "subModules", "methodology", "resources", "duration"]
 };
 
+/**
+ * Generates detailed content for a single module.
+ */
 const generateModuleDetail = async (
   ai: GoogleGenAI, 
   basics: CourseBasics, 
@@ -214,6 +236,9 @@ const generateModuleDetail = async (
   return JSON.parse(response.text || "{}");
 };
 
+/**
+ * Generates the full detailed content for the entire course plan.
+ */
 export const generateFinalPlanContent = async (
   basics: CourseBasics, 
   outcomes: LearningOutcome[],
@@ -239,8 +264,7 @@ export const generateFinalPlanContent = async (
         refinedModules.push({
           ...fullMod,
           id: partialMod.id,
-          // If title changed significantly, keep original or use new? Let's prefer the structure title but allow AI refinement
-          title: partialMod.title // Enforce user's title structure
+          title: partialMod.title 
         });
       } catch (e) {
         console.error(`Failed to generate detail`, e);
@@ -248,12 +272,12 @@ export const generateFinalPlanContent = async (
       }
     }
 
-    // 2. Generate Summary & Review Questions for the day (since we only had titles before)
+    // 2. Generate Summary & Review Questions for the day
     if (onProgress) onProgress(`Finalizing Day ${day.dayNumber} summary...`);
     const endOfDayPrompt = `
        Create a Day End Summary and 3 Review Questions for Day ${day.dayNumber} of course "${basics.courseTitle}".
        Modules covered: ${refinedModules.map(m => m.title).join(', ')}.
-       Return JSON { summary: string, reviewQuestions: string[] }
+       Return JSON { "summary": "string", "reviewQuestions": ["string"] }
     `;
     
     let summaryData = { summary: day.summary, reviewQuestions: day.reviewQuestions };
@@ -261,11 +285,25 @@ export const generateFinalPlanContent = async (
         const endResp = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
             contents: endOfDayPrompt,
-            config: { responseMimeType: "application/json" }
+            config: { 
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  summary: { type: Type.STRING },
+                  reviewQuestions: { type: Type.ARRAY, items: { type: Type.STRING } }
+                }
+              }
+            }
         });
         const parsed = JSON.parse(endResp.text || "{}");
-        if(parsed.summary) summaryData = parsed;
-    } catch(e) {}
+        summaryData = {
+          summary: parsed.summary || day.summary,
+          reviewQuestions: parsed.reviewQuestions || day.reviewQuestions
+        };
+    } catch (e) {
+        console.error(`Failed to generate day summary`, e);
+    }
 
     refinedDays.push({
       ...day,
@@ -278,17 +316,26 @@ export const generateFinalPlanContent = async (
   return refinedDays;
 };
 
-export const refineContent = async (text: string, contextType: string): Promise<string> => {
+// --- Step 6: Refine Content ---
+
+/**
+ * Refines existing text using Gemini to improve clarity and tone.
+ */
+export const refineContent = async (text: string, context: string): Promise<string> => {
   const ai = getClient();
   const prompt = `
-    Refine this text for a TTT Session Plan ("${contextType}").
-    Current: "${text}"
-    Requirement: Professional, concise, action-oriented. Simple English.
-    Return ONLY rewritten text.
+    Refine the following content for a corporate training plan.
+    Context: ${context}
+    Original Text: ${text}
+    
+    Task: Improve clarity, professional tone, and engagement while keeping it simple (CEFR B2 level).
+    Return ONLY the refined text.
   `;
+
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: prompt,
+    contents: prompt
   });
+
   return response.text?.trim() || text;
 };
