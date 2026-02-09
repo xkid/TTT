@@ -1,20 +1,30 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { CourseBasics, LearningOutcome, DayPlan, ModuleContent, IceBreaker } from "../types";
 
 /**
- * Gets the API key from localStorage or falls back to the environment variable.
+ * Gets the API key from localStorage or falls back to the environment variable safely.
  */
 const getApiKey = () => {
   const userKey = localStorage.getItem('MY_TTT_API_KEY');
-  return userKey || process.env.API_KEY;
+  if (userKey) return userKey;
+
+  try {
+    // Check if process and process.env are defined to prevent crash
+    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+      return process.env.API_KEY;
+    }
+  } catch (e) {
+    console.warn("Environment API key not accessible");
+  }
+  
+  return undefined;
 };
 
 const getClient = () => {
   const apiKey = getApiKey();
   
   if (!apiKey) {
-    throw new Error("Gemini API Key not found. Please set it in Settings.");
+    throw new Error("Gemini API Key not found. Please set it in Settings (top right gear icon).");
   }
   
   return new GoogleGenAI({ apiKey });
